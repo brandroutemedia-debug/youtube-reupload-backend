@@ -15,6 +15,10 @@ app.get('/', (req, res) => {
   res.json({ status: 'Backend is running!' });
 });
 
+app.get('/health', (req, res) => {
+  res.json({ status: 'ok' });
+});
+
 app.post('/reupload', async (req, res) => {
   const { secret, videoUrl, channelToken, title, description } = req.body;
 
