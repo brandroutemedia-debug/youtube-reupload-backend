@@ -1,5 +1,5 @@
 {
-  "name": "youtube-reupload-backend",
+  "name": "railway-reupload-backend",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
@@ -7,8 +7,6 @@
   },
   "dependencies": {
     "express": "^4.18.2",
-    "googleapis": "^140.0.0",
-    "cors": "^2.8.5",
-    "dotenv": "^16.0.0"
+    "googleapis": "^128.0.0"
   }
 }
