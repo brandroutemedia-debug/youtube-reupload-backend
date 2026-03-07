@@ -1,14 +1,4 @@
-// v2
-/**
- * Railway Backend for Video Re-upload
- * 
- * Required environment variables:
- *   GOOGLE_CLIENT_ID        - OAuth 2.0 Client ID
- *   GOOGLE_CLIENT_SECRET    - OAuth 2.0 Client Secret
- *   REUPLOAD_WEBHOOK_SECRET - Shared secret for webhook auth
- *   PORT                    - Server port (Railway sets this automatically)
- */
-
+// v3
 const express = require("express");
 const { exec } = require("child_process");
 const fs = require("fs");
@@ -78,74 +68,48 @@ app.post("/api/reupload", async (req, res) => {
     await updateStatus(webhook_url, job_id, "downloading");
     await run(`yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${rawFile}" "${source_url}"`);
 
-    if (!fs.existsSync(rawFile)) {
-      throw new Error("Download failed — file not found");
-    }
+    if (!fs.existsSync(rawFile)) throw new Error("Download failed");
 
     await updateStatus(webhook_url, job_id, "muting");
     await run(`ffmpeg -i "${rawFile}" -an -c:v copy "${mutedFile}" -y`);
 
-    if (!fs.existsSync(mutedFile)) {
-      throw new Error("Muting failed — file not found");
-    }
+    if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
 
     const auth = getOAuth2Client(google_refresh_token);
     const youtube = google.youtube({ version: "v3", auth });
 
-    let title = custom_title || `Re-uploaded video ${source_video_id || ""}`;
+    let title = custom_title || `Re-uploaded video`;
     let description = custom_description || `Re-uploaded from ${source_url}`;
 
-    if (!custom_title) {
+    if (!custom_title && source_video_id) {
       try {
-        const metaRes = await youtube.videos.list({
-          part: ["snippet"],
-          id: [source_video_id],
-        });
+        const metaRes = await youtube.videos.list({ part: ["snippet"], id: [source_video_id] });
         if (metaRes.data.items && metaRes.data.items.length > 0) {
-          const snippet = metaRes.data.items[0].snippet;
-          title = snippet.title || title;
-          description = snippet.description || description;
+          title = metaRes.data.items[0].snippet.title || title;
+          description = metaRes.data.items[0].snippet.description || description;
         }
-      } catch (e) {
-        console.log("Could not fetch source metadata:", e.message);
-      }
+      } catch (e) {}
     }
 
     const uploadRes = await youtube.videos.insert({
       part: ["snippet", "status"],
       requestBody: {
-        snippet: {
-          title,
-          description,
-          categoryId: "22",
-        },
-        status: {
-          privacyStatus: "private",
-        },
+        snippet: { title, description, categoryId: "22" },
+        status: { privacyStatus: "private" },
       },
-      media: {
-        body: fs.createReadStream(mutedFile),
-      },
+      media: { body: fs.createReadStream(mutedFile) },
     });
 
-    const uploadedVideoId = uploadRes.data.id;
-    await updateStatus(webhook_url, job_id, "done", { uploaded_video_id: uploadedVideoId });
-
-    console.log(`✅ Job ${job_id} completed. Uploaded: ${uploadedVideoId}`);
+    await updateStatus(webhook_url, job_id, "done", { uploaded_video_id: uploadRes.data.id });
   } catch (err) {
-    console.error(`❌ Job ${job_id} failed:`, err.message);
     await updateStatus(webhook_url, job_id, "failed", { error_message: err.message });
   } finally {
-    try {
-      fs.rmSync(workDir, { recursive: true, force: true });
-    } catch (e) {}
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
   }
 });
 
 app.get("/health", (req, res) => res.json({ ok: true }));
 
-app.listen(PORT, () => {
-  console.log(`🚀 Re-upload backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
