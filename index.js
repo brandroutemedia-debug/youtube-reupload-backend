@@ -62,7 +62,7 @@ function run(cmd) {
 
 function getYtDlpCmd(sourceUrl, outputFile) {
   var cookiesFlag = hasCookies ? ' --cookies "' + COOKIES_PATH + '"' : "";
-  return 'yt-dlp --js-runtimes nodejs -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4' + cookiesFlag + ' -o "' + outputFile + '" "' + sourceUrl + '"';
+  return 'yt-dlp --js-runtimes nodej -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4' + cookiesFlag + ' -o "' + outputFile + '" "' + sourceUrl + '"';
 }
 
 app.post("/api/reupload", async function(req, res) {
