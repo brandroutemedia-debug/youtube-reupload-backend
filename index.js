@@ -12,10 +12,26 @@ const PORT = process.env.PORT || 3000;
 const COOKIES_PATH = path.join("/tmp", "cookies.txt");
 
 function ensureCookiesFile() {
-  const cookiesContent = process.env.YOUTUBE_COOKIES;
+  var cookiesContent = process.env.YOUTUBE_COOKIES;
   if (cookiesContent) {
-    fs.writeFileSync(COOKIES_PATH, cookiesContent, "utf8");
+    // Ensure Netscape header is present
+    var header = "# Netscape HTTP Cookie File";
+    if (cookiesContent.indexOf(header) === -1) {
+      cookiesContent = header + "\n" + cookiesContent;
+    }
+    // Fix lines: remove empty lines and ensure proper format
+    var lines = cookiesContent.split("\n");
+    var cleaned = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line.length > 0) {
+        cleaned.push(line);
+      }
+    }
+    var finalContent = cleaned.join("\n") + "\n";
+    fs.writeFileSync(COOKIES_PATH, finalContent, "utf8");
     console.log("Cookies file written to " + COOKIES_PATH);
+    console.log("Cookie lines: " + cleaned.length);
     return true;
   }
   console.warn("No YOUTUBE_COOKIES environment variable found");
