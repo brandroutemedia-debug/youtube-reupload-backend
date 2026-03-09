@@ -81,7 +81,7 @@ app.post("/api/reupload", async (req, res) => {
     const youtube = google.youtube({ version: "v3", auth });
 
     let title = custom_title || `Re-uploaded video`;
-    let description = custom_description || `Re-uploaded video`;
+    let description = custom_description || `Re-uploaded video``;
 
     if (!custom_title && source_video_id) {
       try {
