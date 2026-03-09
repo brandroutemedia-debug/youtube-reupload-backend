@@ -33,7 +33,7 @@ async function updateStatus(webhookUrl, jobId, status, extra = {}) {
       }),
     });
   } catch (err) {
-    console.error(`Failed to update status to ${status}:`, err.message);
+    console.error("Failed to update status to " + status + ":", err.message);
   }
 }
 
@@ -66,22 +66,19 @@ app.post("/api/reupload", async (req, res) => {
     fs.mkdirSync(workDir, { recursive: true });
 
     await updateStatus(webhook_url, job_id, "downloading");
-    await run(`yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${rawFile}" "${source_url}"`);
-
+    await run('yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "' + rawFile + '" "' + source_url + '"');
     if (!fs.existsSync(rawFile)) throw new Error("Download failed");
 
     await updateStatus(webhook_url, job_id, "muting");
-    await run(`ffmpeg -i "${rawFile}" -an -c:v copy "${mutedFile}" -y`);
-
+    await run('ffmpeg -i "' + rawFile + '" -an -c:v copy "' + mutedFile + '" -y');
     if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
-
     const auth = getOAuth2Client(google_refresh_token);
     const youtube = google.youtube({ version: "v3", auth });
 
-    let title = custom_title || `Re-uploaded video`;
-    let description = custom_description || `Re-uploaded video``;
+    var title = custom_title || "Re-uploaded video";
+    var description = custom_description || "";
 
     if (!custom_title && source_video_id) {
       try {
@@ -96,7 +93,7 @@ app.post("/api/reupload", async (req, res) => {
     const uploadRes = await youtube.videos.insert({
       part: ["snippet", "status"],
       requestBody: {
-        snippet: { title, description, categoryId: "22" },
+        snippet: { title: title, description: description, categoryId: "22" },
         status: { privacyStatus: "private" },
       },
       media: { body: fs.createReadStream(mutedFile) },
@@ -110,12 +107,7 @@ app.post("/api/reupload", async (req, res) => {
   }
 });
 
-  } catch (err) {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
-    res.status(500).json({ error: err.message });
-  }
-});
+app.get("/health", function(req, res) { res.json({ ok: true }); });
 
-app.get("/health", (req, res) => res.json({ ok: true }));
+app.listen(PORT, function() { console.log("Server running on port " + PORT); });
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
