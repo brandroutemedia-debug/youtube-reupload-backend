@@ -1,4 +1,4 @@
-// v3
+// v4
 const express = require("express");
 const { exec } = require("child_process");
 const fs = require("fs");
@@ -9,6 +9,20 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
+const COOKIES_PATH = path.join("/tmp", "cookies.txt");
+
+function ensureCookiesFile() {
+  const cookiesContent = process.env.YOUTUBE_COOKIES;
+  if (cookiesContent) {
+    fs.writeFileSync(COOKIES_PATH, cookiesContent, "utf8");
+    console.log("Cookies file written to " + COOKIES_PATH);
+    return true;
+  }
+  console.warn("No YOUTUBE_COOKIES environment variable found");
+  return false;
+}
+
+const hasCookies = ensureCookiesFile();
 
 function getOAuth2Client(refreshToken) {
   const oauth2 = new google.auth.OAuth2(
@@ -38,35 +52,45 @@ async function updateStatus(webhookUrl, jobId, status, extra = {}) {
 }
 
 function run(cmd) {
-  return new Promise((resolve, reject) => {
-    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, (err, stdout, stderr) => {
+  return new Promise(function(resolve, reject) {
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, function(err, stdout, stderr) {
       if (err) reject(new Error(stderr || err.message));
       else resolve(stdout);
     });
   });
 }
 
-app.post("/api/reupload", async (req, res) => {
-  const {
-    job_id, source_url, source_video_id, destination_channel_id,
-    google_refresh_token, webhook_url, custom_title, custom_description,
-  } = req.body;
+function getYtDlpCmd(sourceUrl, outputFile) {
+  var cookiesFlag = hasCookies ? ' --cookies "' + COOKIES_PATH + '"' : "";
+  return 'yt-dlp --js-runtimes nodejs -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4' + cookiesFlag + ' -o "' + outputFile + '" "' + sourceUrl + '"';
+}
+
+app.post("/api/reupload", async function(req, res) {
+  var body = req.body;
+  var job_id = body.job_id;
+  var source_url = body.source_url;
+  var source_video_id = body.source_video_id;
+  var destination_channel_id = body.destination_channel_id;
+  var google_refresh_token = body.google_refresh_token;
+  var webhook_url = body.webhook_url;
+  var custom_title = body.custom_title;
+  var custom_description = body.custom_description;
 
   if (!job_id || !source_url || !webhook_url || !google_refresh_token) {
     return res.status(400).json({ error: "Missing required fields" });
   }
 
-  res.json({ accepted: true, job_id });
+  res.json({ accepted: true, job_id: job_id });
 
-  const workDir = path.join("/tmp", job_id);
-  const rawFile = path.join(workDir, "video.mp4");
-  const mutedFile = path.join(workDir, "muted.mp4");
+  var workDir = path.join("/tmp", job_id);
+  var rawFile = path.join(workDir, "video.mp4");
+  var mutedFile = path.join(workDir, "muted.mp4");
 
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
     await updateStatus(webhook_url, job_id, "downloading");
-    await run('yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "' + rawFile + '" "' + source_url + '"');
+    await run(getYtDlpCmd(source_url, rawFile));
     if (!fs.existsSync(rawFile)) throw new Error("Download failed");
 
     await updateStatus(webhook_url, job_id, "muting");
@@ -74,15 +98,15 @@ app.post("/api/reupload", async (req, res) => {
     if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
-    const auth = getOAuth2Client(google_refresh_token);
-    const youtube = google.youtube({ version: "v3", auth });
+    var auth = getOAuth2Client(google_refresh_token);
+    var youtube = google.youtube({ version: "v3", auth: auth });
 
     var title = custom_title || "Re-uploaded video";
     var description = custom_description || "";
 
     if (!custom_title && source_video_id) {
       try {
-        const metaRes = await youtube.videos.list({ part: ["snippet"], id: [source_video_id] });
+        var metaRes = await youtube.videos.list({ part: ["snippet"], id: [source_video_id] });
         if (metaRes.data.items && metaRes.data.items.length > 0) {
           title = metaRes.data.items[0].snippet.title || title;
           description = metaRes.data.items[0].snippet.description || description;
@@ -90,7 +114,7 @@ app.post("/api/reupload", async (req, res) => {
       } catch (e) {}
     }
 
-    const uploadRes = await youtube.videos.insert({
+    var uploadRes = await youtube.videos.insert({
       part: ["snippet", "status"],
       requestBody: {
         snippet: { title: title, description: description, categoryId: "22" },
@@ -107,7 +131,6 @@ app.post("/api/reupload", async (req, res) => {
   }
 });
 
-app.get("/health", function(req, res) { res.json({ ok: true }); });
+app.get("/health", function(req, res) { res.json({ ok: true, cookies: hasCookies }); });
 
 app.listen(PORT, function() { console.log("Server running on port " + PORT); });
-
