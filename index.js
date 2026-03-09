@@ -1,4 +1,3 @@
-/api/download-muted
 // v3
 const express = require("express");
 const { exec } = require("child_process");
@@ -108,6 +107,40 @@ app.post("/api/reupload", async (req, res) => {
     await updateStatus(webhook_url, job_id, "failed", { error_message: err.message });
   } finally {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+  }
+});
+
+app.post("/api/download-muted", async (req, res) => {
+  const { source_url } = req.body;
+  if (!source_url) {
+    return res.status(400).json({ error: "source_url is required" });
+  }
+  const jobId = `dl-${Date.now()}`;
+  const workDir = path.join("/tmp", jobId);
+  const rawFile = path.join(workDir, "video.mp4");
+  const mutedFile = path.join(workDir, "muted.mp4");
+  try {
+    fs.mkdirSync(workDir, { recursive: true });
+    await run(`yt-dlp -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4 -o "${rawFile}" "${source_url}"`);
+    if (!fs.existsSync(rawFile)) throw new Error("Download failed");
+    await run(`ffmpeg -i "${rawFile}" -an -c:v copy "${mutedFile}" -y`);
+    if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
+    const stat = fs.statSync(mutedFile);
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Length", stat.size);
+    res.setHeader("Content-Disposition", `attachment; filename="muted-video.mp4"`);
+    const stream = fs.createReadStream(mutedFile);
+    stream.pipe(res);
+    stream.on("end", () => {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    });
+    stream.on("error", (err) => {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+  } catch (err) {
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    res.status(500).json({ error: err.message });
   }
 });
 
