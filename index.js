@@ -1,3 +1,4 @@
+/api/download-muted
 // v3
 const express = require("express");
 const { exec } = require("child_process");
