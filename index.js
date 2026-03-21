@@ -1,4 +1,4 @@
-// v4
+// v5
 const express = require("express");
 const { exec } = require("child_process");
 const fs = require("fs");
@@ -11,6 +11,7 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const COOKIES_PATH = path.join("/tmp", "cookies.txt");
 
+// Write YouTube cookies from environment variable to file
 function ensureCookiesFile() {
   var cookiesContent = process.env.YOUTUBE_COOKIES;
   if (cookiesContent) {
@@ -38,6 +39,7 @@ function ensureCookiesFile() {
   return false;
 }
 
+// Write cookies on startup
 const hasCookies = ensureCookiesFile();
 
 function getOAuth2Client(refreshToken) {
@@ -144,6 +146,52 @@ app.post("/api/reupload", async function(req, res) {
     await updateStatus(webhook_url, job_id, "failed", { error_message: err.message });
   } finally {
     try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+  }
+});
+
+// Download source video, mute it, and return the muted file
+app.post("/api/download-muted", async function(req, res) {
+  var source_url = req.body.source_url;
+  if (!source_url) {
+    return res.status(400).json({ error: "source_url is required" });
+  }
+
+  var jobId = "mute-" + Date.now();
+  var workDir = path.join("/tmp", jobId);
+  var rawFile = path.join(workDir, "video.mp4");
+  var mutedFile = path.join(workDir, "muted.mp4");
+
+  try {
+    fs.mkdirSync(workDir, { recursive: true });
+
+    console.log("download-muted: downloading " + source_url);
+    await run(getYtDlpCmd(source_url, rawFile));
+    if (!fs.existsSync(rawFile)) throw new Error("Download failed");
+
+    console.log("download-muted: muting audio");
+    await run('ffmpeg -i "' + rawFile + '" -an -c:v copy "' + mutedFile + '" -y');
+    if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
+
+    var stat = fs.statSync(mutedFile);
+    console.log("download-muted: sending muted file, size=" + stat.size);
+
+    res.setHeader("Content-Type", "video/mp4");
+    res.setHeader("Content-Length", stat.size);
+    res.setHeader("Content-Disposition", "attachment; filename=muted.mp4");
+
+    var stream = fs.createReadStream(mutedFile);
+    stream.pipe(res);
+    stream.on("end", function() {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    });
+    stream.on("error", function(err) {
+      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+      if (!res.headersSent) res.status(500).json({ error: err.message });
+    });
+  } catch (err) {
+    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    console.error("download-muted error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
