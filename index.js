@@ -76,11 +76,11 @@ function run(cmd) {
 
 // 480p quality limit to reduce cost
 function getYtDlpCmd(sourceUrl, outputFile) {
-  var cookiesFlag = hasCookies 
-    ? ' --cookies "' + COOKIES_PATH + '"' 
+  var cookiesFlag = hasCookies
+    ? ' --cookies "' + COOKIES_PATH + '"'
     : "";
-  return 'yt-dlp --js-runtimes node -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]" --merge-output-format mp4' 
-    + cookiesFlag 
+  return 'yt-dlp --js-runtimes node -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]" --merge-output-format mp4'
+    + cookiesFlag
     + ' -o "' + outputFile + '" "' + sourceUrl + '"';
 }
 
@@ -110,15 +110,15 @@ app.post("/api/reupload", async function(req, res) {
 
     await updateStatus(webhook_url, job_id, "downloading");
     await run(getYtDlpCmd(source_url, rawFile));
-    if (!fs.existsSync(rawFile)) 
+    if (!fs.existsSync(rawFile))
       throw new Error("Download failed");
 
     await updateStatus(webhook_url, job_id, "muting");
     await run(
-      'ffmpeg -i "' + rawFile + '" -an -c:v copy "' 
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "'
       + mutedFile + '" -y'
     );
-    if (!fs.existsSync(mutedFile)) 
+    if (!fs.existsSync(mutedFile))
       throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
@@ -130,11 +130,11 @@ app.post("/api/reupload", async function(req, res) {
 
     if (!custom_title && source_video_id) {
       try {
-        var metaRes = await youtube.videos.list({ 
-          part: ["snippet"], 
-          id: [source_video_id] 
+        var metaRes = await youtube.videos.list({
+          part: ["snippet"],
+          id: [source_video_id]
         });
-        if (metaRes.data.items && 
+        if (metaRes.data.items &&
             metaRes.data.items.length > 0) {
           title = metaRes.data.items[0]
             .snippet.title || title;
@@ -147,10 +147,10 @@ app.post("/api/reupload", async function(req, res) {
     var uploadRes = await youtube.videos.insert({
       part: ["snippet", "status"],
       requestBody: {
-        snippet: { 
-          title: title, 
-          description: description, 
-          categoryId: "22" 
+        snippet: {
+          title: title,
+          description: description,
+          categoryId: "22"
         },
         status: { privacyStatus: "private" },
       },
@@ -158,32 +158,30 @@ app.post("/api/reupload", async function(req, res) {
     });
 
     await updateStatus(
-      webhook_url, 
-      job_id, 
-      "done", 
+      webhook_url,
+      job_id,
+      "done",
       { uploaded_video_id: uploadRes.data.id }
     );
   } catch (err) {
     await updateStatus(
-      webhook_url, 
-      job_id, 
-      "failed", 
+      webhook_url,
+      job_id,
+      "failed",
       { error_message: err.message }
     );
   } finally {
-    try { 
-      fs.rmSync(workDir, { recursive: true, force: true }); 
+    try {
+      fs.rmSync(workDir, { recursive: true, force: true });
     } catch (e) {}
   }
 });
 
-// Download source video, mute it, 
-// and return the muted file for Drive upload
 app.post("/api/download-muted", async function(req, res) {
   var source_url = req.body.source_url;
   if (!source_url) {
-    return res.status(400).json({ 
-      error: "source_url is required" 
+    return res.status(400).json({
+      error: "source_url is required"
     });
   }
 
@@ -195,85 +193,66 @@ app.post("/api/download-muted", async function(req, res) {
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
-    console.log("download-muted: downloading " 
+    console.log("download-muted: downloading "
       + source_url);
     await run(getYtDlpCmd(source_url, rawFile));
-    if (!fs.existsSync(rawFile)) 
+    if (!fs.existsSync(rawFile))
       throw new Error("Download failed");
 
     console.log("download-muted: muting audio");
     await run(
-      'ffmpeg -i "' + rawFile + '" -an -c:v copy "' 
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "'
       + mutedFile + '" -y'
     );
-    if (!fs.existsSync(mutedFile)) 
+    if (!fs.existsSync(mutedFile))
       throw new Error("Muting failed");
 
     var stat = fs.statSync(mutedFile);
     console.log(
-      "download-muted: sending muted file, size=" 
+      "download-muted: sending muted file, size="
       + stat.size
     );
 
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Content-Length", stat.size);
     res.setHeader(
-      "Content-Disposition", 
+      "Content-Disposition",
       "attachment; filename=muted.mp4"
     );
 
     var stream = fs.createReadStream(mutedFile);
     stream.pipe(res);
     stream.on("end", function() {
-      try { 
-        fs.rmSync(workDir, { 
-          recursive: true, force: true 
-        }); 
+      try {
+        fs.rmSync(workDir, {
+          recursive: true, force: true
+        });
       } catch (e) {}
     });
     stream.on("error", function(err) {
-      try { 
-        fs.rmSync(workDir, { 
-          recursive: true, force: true 
-        }); 
+      try {
+        fs.rmSync(workDir, {
+          recursive: true, force: true
+        });
       } catch (e) {}
-      if (!res.headersSent) 
+      if (!res.headersSent)
         res.status(500).json({ error: err.message });
     });
   } catch (err) {
-    try { 
-      fs.rmSync(workDir, { 
-        recursive: true, force: true 
-      }); 
+    try {
+      fs.rmSync(workDir, {
+        recursive: true, force: true
+      });
     } catch (e) {}
     console.error("download-muted error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/health", function(req, res) { 
-  res.json({ ok: true, cookies: hasCookies }); 
+app.get("/health", function(req, res) {
+  res.json({ ok: true, cookies: hasCookies });
 });
 
-app.listen(PORT, function() { 
-  console.log("Server running on port " + PORT); 
+app.listen(PORT, function() {
+  console.log("Server running on port " + PORT);
 });
-```
-
----
-
-## GitHub এ করো:
-```
-github.com/brandroutemedia-debug/
-youtube-reupload-backend
-    ↓
-index.js → Edit
-    ↓
-Ctrl+A → Delete
-    ↓
-উপরের code paste করো
-    ↓
-Commit message: 
-"v6 - 480p quality to reduce cost"
-    ↓
-Commit changes ✅
