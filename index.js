@@ -1,4 +1,4 @@
-// v5
+// v6 - 480p quality limit for cost reduction
 const express = require("express");
 const { exec } = require("child_process");
 const fs = require("fs");
@@ -11,16 +11,13 @@ app.use(express.json());
 const PORT = process.env.PORT || 3000;
 const COOKIES_PATH = path.join("/tmp", "cookies.txt");
 
-// Write YouTube cookies from environment variable to file
 function ensureCookiesFile() {
   var cookiesContent = process.env.YOUTUBE_COOKIES;
   if (cookiesContent) {
-    // Ensure Netscape header is present
     var header = "# Netscape HTTP Cookie File";
     if (cookiesContent.indexOf(header) === -1) {
       cookiesContent = header + "\n" + cookiesContent;
     }
-    // Fix lines: remove empty lines and ensure proper format
     var lines = cookiesContent.split("\n");
     var cleaned = [];
     for (var i = 0; i < lines.length; i++) {
@@ -39,7 +36,6 @@ function ensureCookiesFile() {
   return false;
 }
 
-// Write cookies on startup
 const hasCookies = ensureCookiesFile();
 
 function getOAuth2Client(refreshToken) {
@@ -78,9 +74,14 @@ function run(cmd) {
   });
 }
 
+// 480p quality limit to reduce cost
 function getYtDlpCmd(sourceUrl, outputFile) {
-  var cookiesFlag = hasCookies ? ' --cookies "' + COOKIES_PATH + '"' : "";
-  return 'yt-dlp --js-runtimes node -f "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best" --merge-output-format mp4' + cookiesFlag + ' -o "' + outputFile + '" "' + sourceUrl + '"';
+  var cookiesFlag = hasCookies 
+    ? ' --cookies "' + COOKIES_PATH + '"' 
+    : "";
+  return 'yt-dlp --js-runtimes node -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]" --merge-output-format mp4' 
+    + cookiesFlag 
+    + ' -o "' + outputFile + '" "' + sourceUrl + '"';
 }
 
 app.post("/api/reupload", async function(req, res) {
@@ -109,11 +110,16 @@ app.post("/api/reupload", async function(req, res) {
 
     await updateStatus(webhook_url, job_id, "downloading");
     await run(getYtDlpCmd(source_url, rawFile));
-    if (!fs.existsSync(rawFile)) throw new Error("Download failed");
+    if (!fs.existsSync(rawFile)) 
+      throw new Error("Download failed");
 
     await updateStatus(webhook_url, job_id, "muting");
-    await run('ffmpeg -i "' + rawFile + '" -an -c:v copy "' + mutedFile + '" -y');
-    if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
+    await run(
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "' 
+      + mutedFile + '" -y'
+    );
+    if (!fs.existsSync(mutedFile)) 
+      throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
     var auth = getOAuth2Client(google_refresh_token);
@@ -124,10 +130,16 @@ app.post("/api/reupload", async function(req, res) {
 
     if (!custom_title && source_video_id) {
       try {
-        var metaRes = await youtube.videos.list({ part: ["snippet"], id: [source_video_id] });
-        if (metaRes.data.items && metaRes.data.items.length > 0) {
-          title = metaRes.data.items[0].snippet.title || title;
-          description = metaRes.data.items[0].snippet.description || description;
+        var metaRes = await youtube.videos.list({ 
+          part: ["snippet"], 
+          id: [source_video_id] 
+        });
+        if (metaRes.data.items && 
+            metaRes.data.items.length > 0) {
+          title = metaRes.data.items[0]
+            .snippet.title || title;
+          description = metaRes.data.items[0]
+            .snippet.description || description;
         }
       } catch (e) {}
     }
@@ -135,25 +147,44 @@ app.post("/api/reupload", async function(req, res) {
     var uploadRes = await youtube.videos.insert({
       part: ["snippet", "status"],
       requestBody: {
-        snippet: { title: title, description: description, categoryId: "22" },
+        snippet: { 
+          title: title, 
+          description: description, 
+          categoryId: "22" 
+        },
         status: { privacyStatus: "private" },
       },
       media: { body: fs.createReadStream(mutedFile) },
     });
 
-    await updateStatus(webhook_url, job_id, "done", { uploaded_video_id: uploadRes.data.id });
+    await updateStatus(
+      webhook_url, 
+      job_id, 
+      "done", 
+      { uploaded_video_id: uploadRes.data.id }
+    );
   } catch (err) {
-    await updateStatus(webhook_url, job_id, "failed", { error_message: err.message });
+    await updateStatus(
+      webhook_url, 
+      job_id, 
+      "failed", 
+      { error_message: err.message }
+    );
   } finally {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    try { 
+      fs.rmSync(workDir, { recursive: true, force: true }); 
+    } catch (e) {}
   }
 });
 
-// Download source video, mute it, and return the muted file
+// Download source video, mute it, 
+// and return the muted file for Drive upload
 app.post("/api/download-muted", async function(req, res) {
   var source_url = req.body.source_url;
   if (!source_url) {
-    return res.status(400).json({ error: "source_url is required" });
+    return res.status(400).json({ 
+      error: "source_url is required" 
+    });
   }
 
   var jobId = "mute-" + Date.now();
@@ -164,37 +195,85 @@ app.post("/api/download-muted", async function(req, res) {
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
-    console.log("download-muted: downloading " + source_url);
+    console.log("download-muted: downloading " 
+      + source_url);
     await run(getYtDlpCmd(source_url, rawFile));
-    if (!fs.existsSync(rawFile)) throw new Error("Download failed");
+    if (!fs.existsSync(rawFile)) 
+      throw new Error("Download failed");
 
     console.log("download-muted: muting audio");
-    await run('ffmpeg -i "' + rawFile + '" -an -c:v copy "' + mutedFile + '" -y');
-    if (!fs.existsSync(mutedFile)) throw new Error("Muting failed");
+    await run(
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "' 
+      + mutedFile + '" -y'
+    );
+    if (!fs.existsSync(mutedFile)) 
+      throw new Error("Muting failed");
 
     var stat = fs.statSync(mutedFile);
-    console.log("download-muted: sending muted file, size=" + stat.size);
+    console.log(
+      "download-muted: sending muted file, size=" 
+      + stat.size
+    );
 
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Content-Length", stat.size);
-    res.setHeader("Content-Disposition", "attachment; filename=muted.mp4");
+    res.setHeader(
+      "Content-Disposition", 
+      "attachment; filename=muted.mp4"
+    );
 
     var stream = fs.createReadStream(mutedFile);
     stream.pipe(res);
     stream.on("end", function() {
-      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+      try { 
+        fs.rmSync(workDir, { 
+          recursive: true, force: true 
+        }); 
+      } catch (e) {}
     });
     stream.on("error", function(err) {
-      try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
-      if (!res.headersSent) res.status(500).json({ error: err.message });
+      try { 
+        fs.rmSync(workDir, { 
+          recursive: true, force: true 
+        }); 
+      } catch (e) {}
+      if (!res.headersSent) 
+        res.status(500).json({ error: err.message });
     });
   } catch (err) {
-    try { fs.rmSync(workDir, { recursive: true, force: true }); } catch (e) {}
+    try { 
+      fs.rmSync(workDir, { 
+        recursive: true, force: true 
+      }); 
+    } catch (e) {}
     console.error("download-muted error:", err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/health", function(req, res) { res.json({ ok: true, cookies: hasCookies }); });
+app.get("/health", function(req, res) { 
+  res.json({ ok: true, cookies: hasCookies }); 
+});
 
-app.listen(PORT, function() { console.log("Server running on port " + PORT); });
+app.listen(PORT, function() { 
+  console.log("Server running on port " + PORT); 
+});
+```
+
+---
+
+## GitHub এ করো:
+```
+github.com/brandroutemedia-debug/
+youtube-reupload-backend
+    ↓
+index.js → Edit
+    ↓
+Ctrl+A → Delete
+    ↓
+উপরের code paste করো
+    ↓
+Commit message: 
+"v6 - 480p quality to reduce cost"
+    ↓
+Commit changes ✅
