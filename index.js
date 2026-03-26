@@ -1,4 +1,4 @@
-// v6 - 480p quality limit for cost reduction
+// v7 - iOS client fallback + auto-update yt-dlp
 const express = require("express");
 const { exec } = require("child_process");
 const fs = require("fs");
@@ -10,6 +10,12 @@ app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
 const COOKIES_PATH = path.join("/tmp", "cookies.txt");
+
+// Auto-update yt-dlp on startup
+exec("pip install -U yt-dlp --quiet", function(err) {
+  if (err) console.warn("yt-dlp update failed:", err.message);
+  else console.log("yt-dlp updated successfully");
+});
 
 function ensureCookiesFile() {
   var cookiesContent = process.env.YOUTUBE_COOKIES;
@@ -74,13 +80,21 @@ function run(cmd) {
   });
 }
 
-// 480p quality limit to reduce cost
+// v7 - iOS + mweb client fallback, retries, no cookie dependency
 function getYtDlpCmd(sourceUrl, outputFile) {
   var cookiesFlag = hasCookies
     ? ' --cookies "' + COOKIES_PATH + '"'
     : "";
-  return 'yt-dlp --js-runtimes node -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]" --merge-output-format mp4'
+  return 'yt-dlp'
+    + ' --extractor-args "youtube:player_client=ios,mweb"'
+    + ' --add-header "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"'
+    + ' --no-check-certificates'
+    + ' --socket-timeout 30'
+    + ' --retries 5'
+    + ' --fragment-retries 5'
     + cookiesFlag
+    + ' -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]"'
+    + ' --merge-output-format mp4'
     + ' -o "' + outputFile + '" "' + sourceUrl + '"';
 }
 
@@ -193,8 +207,7 @@ app.post("/api/download-muted", async function(req, res) {
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
-    console.log("download-muted: downloading "
-      + source_url);
+    console.log("download-muted: downloading " + source_url);
     await run(getYtDlpCmd(source_url, rawFile));
     if (!fs.existsSync(rawFile))
       throw new Error("Download failed");
@@ -209,8 +222,7 @@ app.post("/api/download-muted", async function(req, res) {
 
     var stat = fs.statSync(mutedFile);
     console.log(
-      "download-muted: sending muted file, size="
-      + stat.size
+      "download-muted: sending muted file, size=" + stat.size
     );
 
     res.setHeader("Content-Type", "video/mp4");
@@ -224,25 +236,19 @@ app.post("/api/download-muted", async function(req, res) {
     stream.pipe(res);
     stream.on("end", function() {
       try {
-        fs.rmSync(workDir, {
-          recursive: true, force: true
-        });
+        fs.rmSync(workDir, { recursive: true, force: true });
       } catch (e) {}
     });
     stream.on("error", function(err) {
       try {
-        fs.rmSync(workDir, {
-          recursive: true, force: true
-        });
+        fs.rmSync(workDir, { recursive: true, force: true });
       } catch (e) {}
       if (!res.headersSent)
         res.status(500).json({ error: err.message });
     });
   } catch (err) {
     try {
-      fs.rmSync(workDir, {
-        recursive: true, force: true
-      });
+      fs.rmSync(workDir, { recursive: true, force: true });
     } catch (e) {}
     console.error("download-muted error:", err.message);
     res.status(500).json({ error: err.message });
