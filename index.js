@@ -127,7 +127,7 @@ function getYtDlpArgs(sourceUrl, outputFile) {
   ];
 
   if (hasCookies) {
-    args.splice(10, 0, "--cookies", COOKIES_PATH);
+    args.splice(args.length - 1, 0, "--cookies", COOKIES_PATH);
   }
 
   return args;
