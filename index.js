@@ -1,3 +1,4 @@
+// v8 - tv_embedded client, no cookies required
 const express = require("express");
 const { exec, spawn } = require("child_process");
 const fs = require("fs");
@@ -8,38 +9,12 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const COOKIES_PATH = path.join("/tmp", "cookies.txt");
 const MAX_CAPTURE_LENGTH = 12000;
 
 exec("pip install -U yt-dlp --quiet --break-system-packages", function(err) {
   if (err) console.warn("yt-dlp update failed:", err.message);
   else console.log("yt-dlp updated successfully");
 });
-
-function ensureCookiesFile() {
-  var cookiesContent = process.env.YOUTUBE_COOKIES;
-  if (cookiesContent) {
-    var header = "# Netscape HTTP Cookie File";
-    if (cookiesContent.indexOf(header) === -1) {
-      cookiesContent = header + "\n" + cookiesContent;
-    }
-    var lines = cookiesContent.split("\n");
-    var cleaned = [];
-    for (var i = 0; i < lines.length; i++) {
-      var line = lines[i].trim();
-      if (line.length > 0) cleaned.push(line);
-    }
-    var finalContent = cleaned.join("\n") + "\n";
-    fs.writeFileSync(COOKIES_PATH, finalContent, "utf8");
-    console.log("Cookies file written to " + COOKIES_PATH);
-    console.log("Cookie lines: " + cleaned.length);
-    return true;
-  }
-  console.warn("No YOUTUBE_COOKIES environment variable found");
-  return false;
-}
-
-const hasCookies = ensureCookiesFile();
 
 function getOAuth2Client(refreshToken) {
   const oauth2 = new google.auth.OAuth2(
@@ -76,7 +51,6 @@ function captureChunk(existing, chunk) {
 
 function runProcess(command, args, options) {
   options = options || {};
-
   return new Promise(function(resolve, reject) {
     var stdoutText = "";
     var stderrText = "";
@@ -103,17 +77,16 @@ function runProcess(command, args, options) {
         resolve({ stdout: stdoutText, stderr: stderrText });
         return;
       }
-
       var details = (stderrText || stdoutText || "Unknown process error").trim();
       reject(new Error(command + " exited with code " + code + ": " + details));
     });
   });
 }
 
+// v8 - tv_embedded + web_creator, no cookies, no PO token needed
 function getYtDlpArgs(sourceUrl, outputFile) {
-  var args = [
-    "--extractor-args", "youtube:player_client=ios,mweb",
-    "--add-header", "User-Agent:Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
+  return [
+    "--extractor-args", "youtube:player_client=tv_embedded,web_creator",
     "--no-check-certificates",
     "--socket-timeout", "30",
     "--retries", "5",
@@ -125,12 +98,6 @@ function getYtDlpArgs(sourceUrl, outputFile) {
     "-o", outputFile,
     sourceUrl,
   ];
-
-  if (hasCookies) {
-    args.splice(args.length - 1, 0, "--cookies", COOKIES_PATH);
-  }
-
-  return args;
 }
 
 function getFfmpegArgs(inputFile, outputFile) {
@@ -293,17 +260,15 @@ app.post("/api/download-muted", async function(req, res) {
 app.get("/health", async function(req, res) {
   try {
     await runProcess("sh", ["-lc", "command -v yt-dlp >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1"]);
-    res.json({ ok: true, cookies: hasCookies, tools: true });
+    res.json({ ok: true, tools: true });
   } catch (err) {
-    res.status(500).json({ ok: false, cookies: hasCookies, tools: false, error: err.message });
+    res.status(500).json({ ok: false, tools: false, error: err.message });
   }
 });
 
 app.use(function(err, req, res, next) {
   console.error("Unhandled backend error:", err);
-  if (res.headersSent) {
-    return next(err);
-  }
+  if (res.headersSent) return next(err);
   res.status(500).json({
     error: "Internal backend error",
     details: err && err.message ? err.message : "Unknown error",
