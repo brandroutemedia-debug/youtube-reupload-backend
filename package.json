@@ -1,5 +1,5 @@
 {
-  "name": "railway-reupload-backend",
+  "name": "railway-backend",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
