@@ -1,6 +1,6 @@
-// v8 - tv_embedded client, no cookies required
+// v6 - 480p quality limit for cost reduction
 const express = require("express");
-const { exec, spawn } = require("child_process");
+const { exec } = require("child_process");
 const fs = require("fs");
 const path = require("path");
 const { google } = require("googleapis");
@@ -9,12 +9,34 @@ const app = express();
 app.use(express.json());
 
 const PORT = process.env.PORT || 3000;
-const MAX_CAPTURE_LENGTH = 12000;
+const COOKIES_PATH = path.join("/tmp", "cookies.txt");
 
-exec("pip install -U yt-dlp --quiet --break-system-packages", function(err) {
-  if (err) console.warn("yt-dlp update failed:", err.message);
-  else console.log("yt-dlp updated successfully");
-});
+function ensureCookiesFile() {
+  var cookiesContent = process.env.YOUTUBE_COOKIES;
+  if (cookiesContent) {
+    var header = "# Netscape HTTP Cookie File";
+    if (cookiesContent.indexOf(header) === -1) {
+      cookiesContent = header + "\n" + cookiesContent;
+    }
+    var lines = cookiesContent.split("\n");
+    var cleaned = [];
+    for (var i = 0; i < lines.length; i++) {
+      var line = lines[i].trim();
+      if (line.length > 0) {
+        cleaned.push(line);
+      }
+    }
+    var finalContent = cleaned.join("\n") + "\n";
+    fs.writeFileSync(COOKIES_PATH, finalContent, "utf8");
+    console.log("Cookies file written to " + COOKIES_PATH);
+    console.log("Cookie lines: " + cleaned.length);
+    return true;
+  }
+  console.warn("No YOUTUBE_COOKIES environment variable found");
+  return false;
+}
+
+const hasCookies = ensureCookiesFile();
 
 function getOAuth2Client(refreshToken) {
   const oauth2 = new google.auth.OAuth2(
@@ -43,93 +65,23 @@ async function updateStatus(webhookUrl, jobId, status, extra = {}) {
   }
 }
 
-function captureChunk(existing, chunk) {
-  var next = existing + chunk;
-  if (next.length <= MAX_CAPTURE_LENGTH) return next;
-  return next.slice(next.length - MAX_CAPTURE_LENGTH);
-}
-
-function runProcess(command, args, options) {
-  options = options || {};
+function run(cmd) {
   return new Promise(function(resolve, reject) {
-    var stdoutText = "";
-    var stderrText = "";
-    var child = spawn(command, args, {
-      cwd: options.cwd || process.cwd(),
-      env: process.env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    child.stdout.on("data", function(chunk) {
-      stdoutText = captureChunk(stdoutText, chunk.toString());
-    });
-
-    child.stderr.on("data", function(chunk) {
-      stderrText = captureChunk(stderrText, chunk.toString());
-    });
-
-    child.on("error", function(err) {
-      reject(new Error(command + " failed to start: " + err.message));
-    });
-
-    child.on("close", function(code) {
-      if (code === 0) {
-        resolve({ stdout: stdoutText, stderr: stderrText });
-        return;
-      }
-      var details = (stderrText || stdoutText || "Unknown process error").trim();
-      reject(new Error(command + " exited with code " + code + ": " + details));
+    exec(cmd, { maxBuffer: 1024 * 1024 * 50 }, function(err, stdout, stderr) {
+      if (err) reject(new Error(stderr || err.message));
+      else resolve(stdout);
     });
   });
 }
 
-// v8 - tv_embedded + web_creator, no cookies, no PO token needed
-function getYtDlpArgs(sourceUrl, outputFile) {
-  return [
-    "--extractor-args", "youtube:player_client=tv_embedded,web_creator",
-    "--no-check-certificates",
-    "--socket-timeout", "30",
-    "--retries", "5",
-    "--fragment-retries", "5",
-    "--no-progress",
-    "--newline",
-    "-f", "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]",
-    "--merge-output-format", "mp4",
-    "-o", outputFile,
-    sourceUrl,
-  ];
-}
-
-function getFfmpegArgs(inputFile, outputFile) {
-  return [
-    "-i", inputFile,
-    "-an",
-    "-c:v", "copy",
-    "-movflags", "+faststart",
-    outputFile,
-    "-y",
-    "-nostats",
-    "-loglevel", "error",
-  ];
-}
-
-async function createMutedVideo(sourceUrl, workDir, prefix) {
-  var rawFile = path.join(workDir, "video.mp4");
-  var mutedFile = path.join(workDir, "muted.mp4");
-
-  console.log(prefix + ": downloading " + sourceUrl);
-  await runProcess("yt-dlp", getYtDlpArgs(sourceUrl, rawFile), { cwd: workDir });
-  if (!fs.existsSync(rawFile)) {
-    throw new Error(prefix + ": Download completed but output file was not created");
-  }
-
-  console.log(prefix + ": muting audio");
-  await runProcess("ffmpeg", getFfmpegArgs(rawFile, mutedFile), { cwd: workDir });
-  if (!fs.existsSync(mutedFile)) {
-    throw new Error(prefix + ": Muting completed but output file was not created");
-  }
-
-  return { rawFile, mutedFile };
+// 480p quality limit to reduce cost
+function getYtDlpCmd(sourceUrl, outputFile) {
+  var cookiesFlag = hasCookies
+    ? ' --cookies "' + COOKIES_PATH + '"'
+    : "";
+  return 'yt-dlp --js-runtimes node -f "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480][ext=mp4]/best[height<=480]" --merge-output-format mp4'
+    + cookiesFlag
+    + ' -o "' + outputFile + '" "' + sourceUrl + '"';
 }
 
 app.post("/api/reupload", async function(req, res) {
@@ -137,6 +89,7 @@ app.post("/api/reupload", async function(req, res) {
   var job_id = body.job_id;
   var source_url = body.source_url;
   var source_video_id = body.source_video_id;
+  var destination_channel_id = body.destination_channel_id;
   var google_refresh_token = body.google_refresh_token;
   var webhook_url = body.webhook_url;
   var custom_title = body.custom_title;
@@ -149,12 +102,24 @@ app.post("/api/reupload", async function(req, res) {
   res.json({ accepted: true, job_id: job_id });
 
   var workDir = path.join("/tmp", job_id);
+  var rawFile = path.join(workDir, "video.mp4");
+  var mutedFile = path.join(workDir, "muted.mp4");
 
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
     await updateStatus(webhook_url, job_id, "downloading");
-    var files = await createMutedVideo(source_url, workDir, "reupload " + job_id);
+    await run(getYtDlpCmd(source_url, rawFile));
+    if (!fs.existsSync(rawFile))
+      throw new Error("Download failed");
+
+    await updateStatus(webhook_url, job_id, "muting");
+    await run(
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "'
+      + mutedFile + '" -y'
+    );
+    if (!fs.existsSync(mutedFile))
+      throw new Error("Muting failed");
 
     await updateStatus(webhook_url, job_id, "uploading");
     var auth = getOAuth2Client(google_refresh_token);
@@ -167,15 +132,16 @@ app.post("/api/reupload", async function(req, res) {
       try {
         var metaRes = await youtube.videos.list({
           part: ["snippet"],
-          id: [source_video_id],
+          id: [source_video_id]
         });
-        if (metaRes.data.items && metaRes.data.items.length > 0) {
-          title = metaRes.data.items[0].snippet.title || title;
-          description = metaRes.data.items[0].snippet.description || description;
+        if (metaRes.data.items &&
+            metaRes.data.items.length > 0) {
+          title = metaRes.data.items[0]
+            .snippet.title || title;
+          description = metaRes.data.items[0]
+            .snippet.description || description;
         }
-      } catch (e) {
-        console.warn("Failed to fetch source video metadata:", e.message);
-      }
+      } catch (e) {}
     }
 
     var uploadRes = await youtube.videos.insert({
@@ -184,21 +150,26 @@ app.post("/api/reupload", async function(req, res) {
         snippet: {
           title: title,
           description: description,
-          categoryId: "22",
+          categoryId: "22"
         },
         status: { privacyStatus: "private" },
       },
-      media: { body: fs.createReadStream(files.mutedFile) },
+      media: { body: fs.createReadStream(mutedFile) },
     });
 
-    await updateStatus(webhook_url, job_id, "done", {
-      uploaded_video_id: uploadRes.data.id,
-    });
+    await updateStatus(
+      webhook_url,
+      job_id,
+      "done",
+      { uploaded_video_id: uploadRes.data.id }
+    );
   } catch (err) {
-    console.error("reupload error:", err.message);
-    await updateStatus(webhook_url, job_id, "failed", {
-      error_message: err.message,
-    });
+    await updateStatus(
+      webhook_url,
+      job_id,
+      "failed",
+      { error_message: err.message }
+    );
   } finally {
     try {
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -209,70 +180,77 @@ app.post("/api/reupload", async function(req, res) {
 app.post("/api/download-muted", async function(req, res) {
   var source_url = req.body.source_url;
   if (!source_url) {
-    return res.status(400).json({ error: "source_url is required" });
+    return res.status(400).json({
+      error: "source_url is required"
+    });
   }
 
   var jobId = "mute-" + Date.now();
   var workDir = path.join("/tmp", jobId);
+  var rawFile = path.join(workDir, "video.mp4");
+  var mutedFile = path.join(workDir, "muted.mp4");
 
   try {
     fs.mkdirSync(workDir, { recursive: true });
 
-    var files = await createMutedVideo(source_url, workDir, "download-muted " + jobId);
-    var stat = fs.statSync(files.mutedFile);
-    console.log("download-muted: sending muted file, size=" + stat.size);
+    console.log("download-muted: downloading "
+      + source_url);
+    await run(getYtDlpCmd(source_url, rawFile));
+    if (!fs.existsSync(rawFile))
+      throw new Error("Download failed");
+
+    console.log("download-muted: muting audio");
+    await run(
+      'ffmpeg -i "' + rawFile + '" -an -c:v copy "'
+      + mutedFile + '" -y'
+    );
+    if (!fs.existsSync(mutedFile))
+      throw new Error("Muting failed");
+
+    var stat = fs.statSync(mutedFile);
+    console.log(
+      "download-muted: sending muted file, size="
+      + stat.size
+    );
 
     res.setHeader("Content-Type", "video/mp4");
     res.setHeader("Content-Length", stat.size);
-    res.setHeader("Content-Disposition", "attachment; filename=muted.mp4");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=muted.mp4"
+    );
 
-    var stream = fs.createReadStream(files.mutedFile);
+    var stream = fs.createReadStream(mutedFile);
     stream.pipe(res);
     stream.on("end", function() {
       try {
-        fs.rmSync(workDir, { recursive: true, force: true });
+        fs.rmSync(workDir, {
+          recursive: true, force: true
+        });
       } catch (e) {}
     });
     stream.on("error", function(err) {
-      console.error("download-muted stream error:", err.message);
       try {
-        fs.rmSync(workDir, { recursive: true, force: true });
-      } catch (e) {}
-      if (!res.headersSent) {
-        res.status(500).json({
-          error: "Failed to stream muted video",
-          details: err.message,
+        fs.rmSync(workDir, {
+          recursive: true, force: true
         });
-      }
+      } catch (e) {}
+      if (!res.headersSent)
+        res.status(500).json({ error: err.message });
     });
   } catch (err) {
-    console.error("download-muted error:", err.message);
     try {
-      fs.rmSync(workDir, { recursive: true, force: true });
+      fs.rmSync(workDir, {
+        recursive: true, force: true
+      });
     } catch (e) {}
-    res.status(500).json({
-      error: "Failed to generate muted video",
-      details: err.message,
-    });
+    console.error("download-muted error:", err.message);
+    res.status(500).json({ error: err.message });
   }
 });
 
-app.get("/health", async function(req, res) {
-  try {
-    await runProcess("sh", ["-lc", "command -v yt-dlp >/dev/null 2>&1 && command -v ffmpeg >/dev/null 2>&1"]);
-    res.json({ ok: true, tools: true });
-  } catch (err) {
-    res.status(500).json({ ok: false, tools: false, error: err.message });
-  }
-});
-
-app.use(function(err, req, res, next) {
-  console.error("Unhandled backend error:", err);
-  if (res.headersSent) return next(err);
-  res.status(500).json({
-    error: "Internal backend error",
-    details: err && err.message ? err.message : "Unknown error",
-  });
+app.get("/health", function(req, res) {
+  res.json({ ok: true, cookies: hasCookies });
 });
 
 app.listen(PORT, function() {
